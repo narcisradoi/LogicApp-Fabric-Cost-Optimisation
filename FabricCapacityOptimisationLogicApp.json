@@ -1,0 +1,192 @@
+{
+  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "subscriptionIds": {
+      "type": "Array",
+      "defaultValue": [
+        "<SUBSCRIPTION-ID-1>"
+      ]
+    },
+    "tagKey": {
+      "type": "String",
+      "defaultValue": "AutoPause"
+    },
+    "tagValue": {
+      "type": "String",
+      "defaultValue": "true"
+    },
+    "fabricApiVersion": {
+      "type": "String",
+      "defaultValue": "2023-11-01"
+    },
+    "resourceGraphApiVersion": {
+      "type": "String",
+      "defaultValue": "2024-04-01"
+    }
+  },
+  "triggers": {
+    "Recurrence": {
+      "type": "Recurrence",
+      "recurrence": {
+        "frequency": "Hour",
+        "interval": 1,
+        "timeZone": "GMT Standard Time"
+      }
+    }
+  },
+  "actions": {
+    "Decide_target_state_(weekday_and_business_hours)": {
+      "type": "If",
+      "expression": {
+        "and": [
+          {
+            "greaterOrEquals": [
+              "@dayOfWeek(utcNow())",
+              1
+            ]
+          },
+          {
+            "lessOrEquals": [
+              "@dayOfWeek(utcNow())",
+              5
+            ]
+          },
+          {
+            "greaterOrEquals": [
+              "@int(formatDateTime(utcNow(),'HH'))",
+              8
+            ]
+          },
+          {
+            "less": [
+              "@int(formatDateTime(utcNow(),'HH'))",
+              18
+            ]
+          }
+        ]
+      },
+      "actions": {
+        "Set_operation_to_resume": {
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "operation",
+                "type": "String",
+                "value": "resume"
+              }
+            ]
+          }
+        }
+      },
+      "else": {
+        "actions": {
+          "Set_operation_to_suspend": {
+            "type": "InitializeVariable",
+            "inputs": {
+              "variables": [
+                {
+                  "name": "operation",
+                  "type": "String",
+                  "value": "suspend"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "runAfter": {}
+    },
+    "Compose_ResourceGraph_KQL": {
+      "type": "Compose",
+      "inputs": "@concat(\"Resources | where type =~ 'microsoft.fabric/capacities' | where tostring(tags['\", parameters('tagKey'), \"']) =~ '\", parameters('tagValue'), \"' | project id, name, resourceGroup, subscriptionId, tags\")",
+      "runAfter": {
+        "Decide_target_state_(weekday_and_business_hours)": [
+          "Succeeded"
+        ]
+      }
+    },
+    "Query_ResourceGraph_for_tagged_Fabric_capacities": {
+      "type": "Http",
+      "inputs": {
+        "method": "POST",
+        "uri": "@concat('https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=', parameters('resourceGraphApiVersion'))",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "subscriptions": "@parameters('subscriptionIds')",
+          "query": "@outputs('Compose_ResourceGraph_KQL')"
+        },
+        "authentication": {
+          "type": "ManagedServiceIdentity"
+        }
+      },
+      "runAfter": {
+        "Compose_ResourceGraph_KQL": [
+          "Succeeded"
+        ]
+      }
+    },
+    "Parse_ResourceGraph_response": {
+      "type": "ParseJson",
+      "inputs": {
+        "content": "@body('Query_ResourceGraph_for_tagged_Fabric_capacities')",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "count": { "type": "integer" },
+            "data": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "name": { "type": "string" },
+                  "resourceGroup": { "type": "string" },
+                  "subscriptionId": { "type": "string" },
+                  "tags": { "type": "object" }
+                },
+                "required": [ "id", "name" ]
+              }
+            }
+          },
+          "required": [ "data" ]
+        }
+      },
+      "runAfter": {
+        "Query_ResourceGraph_for_tagged_Fabric_capacities": [
+          "Succeeded"
+        ]
+      }
+    },
+    "For_each_capacity": {
+      "type": "Foreach",
+      "foreach": "@body('Parse_ResourceGraph_response')?['data']",
+      "actions": {
+        "Call_Fabric_capacity_operation_(resume_or_suspend)": {
+          "type": "Http",
+          "inputs": {
+            "method": "POST",
+            "uri": "@concat('https://management.azure.com', item()?['id'], '/', variables('operation'), '?api-version=', parameters('fabricApiVersion'))",
+            "headers": {
+              "Content-Type": "application/json"
+            },
+            "body": {},
+            "authentication": {
+              "type": "ManagedServiceIdentity"
+            }
+          }
+        }
+      },
+      "runAfter": {
+        "Parse_ResourceGraph_response": [
+          "Succeeded"
+        ]
+      }
+    }
+  },
+  "outputs": {}
+}
+``
