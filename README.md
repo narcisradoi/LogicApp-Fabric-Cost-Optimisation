@@ -1,6 +1,14 @@
 # LogicApp-Fabric-Cost-Optimisation
 
-Prereqs (do these once)
+**What does it do?**
+Turns on/off Fabric capacities, based on tags and based on the day of the week, considering weekends as well
+
+**Please note - Gotchas (worth knowing)**
+Suspend is destructive to access, not data — all Fabric workloads become unavailable
+Resume can take a few minutes before users can work
+Call succeeds even if the capacity is already in the target state
+
+**Prereqs (do these once)**
 
 **Enable System-assigned managed identity on the Logic App.**
 Give it:
@@ -19,3 +27,4 @@ Key: AutoPause
 Value: true
 
 (You’ll set these in the workflow parameters below.)
+
